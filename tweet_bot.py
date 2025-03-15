@@ -8,6 +8,11 @@ import threading
 import sys
 from datetime import datetime
 from dotenv import load_dotenv
+# Import keep-alive module
+import keep_alive
+
+# Start the keep-alive server
+keep_alive.run_keep_alive_server()
 
 # Load environment variables
 load_dotenv()
