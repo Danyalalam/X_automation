@@ -5,13 +5,73 @@ import requests
 import http.server
 import socketserver
 import os
+import sys
+import json
+from datetime import datetime
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # Simple HTTP server to keep the service alive
-PORT = int(os.environ.get('PORT', 8080))
+PORT = int(os.environ.get('PORT', 10000))
+LOCK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "koiyu_running.lock")
+
+def is_already_running():
+    """Check if another instance is already running by lock file"""
+    try:
+        # If the lock file exists, check if it's stale
+        if os.path.exists(LOCK_FILE):
+            with open(LOCK_FILE, 'r') as f:
+                data = json.load(f)
+                started_at = datetime.fromisoformat(data.get('started_at', ''))
+                pid = data.get('pid')
+                
+                # If the lock was created less than 5 minutes ago, consider it active
+                if (datetime.now() - started_at).total_seconds() < 300:
+                    logger.info(f"Found recent lock file (PID: {pid}). Another instance may be running.")
+                    return True
+                else:
+                    logger.info(f"Found stale lock file. Removing it.")
+                    os.remove(LOCK_FILE)
+                    return False
+        return False
+    except Exception as e:
+        logger.error(f"Error checking lock file: {e}")
+        # If any error, assume no other instance is running
+        if os.path.exists(LOCK_FILE):
+            try:
+                os.remove(LOCK_FILE)
+            except:
+                pass
+        return False
+
+def create_lock_file():
+    """Create a lock file to indicate this instance is running"""
+    try:
+        with open(LOCK_FILE, 'w') as f:
+            data = {
+                'started_at': datetime.now().isoformat(),
+                'pid': os.getpid()
+            }
+            json.dump(data, f)
+        logger.info(f"Lock file created for PID {os.getpid()}")
+    except Exception as e:
+        logger.error(f"Error creating lock file: {e}")
+
+def update_lock_file():
+    """Update the timestamp in the lock file to keep it fresh"""
+    try:
+        if os.path.exists(LOCK_FILE):
+            with open(LOCK_FILE, 'r') as f:
+                data = json.load(f)
+            
+            data['last_updated'] = datetime.now().isoformat()
+            
+            with open(LOCK_FILE, 'w') as f:
+                json.dump(data, f)
+    except Exception as e:
+        logger.error(f"Error updating lock file: {e}")
 
 class KeepAliveHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
@@ -19,7 +79,40 @@ class KeepAliveHandler(http.server.SimpleHTTPRequestHandler):
             self.send_response(200)
             self.send_header('Content-type', 'text/plain')
             self.end_headers()
-            self.wfile.write(b'KOIYU, the Oracle of Transcendence, is awake and vigilant.')
+            
+            # Get current status
+            current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            status = {
+                "status": "active",
+                "time": current_time,
+                "pid": os.getpid(),
+                "uptime": None
+            }
+            
+            # Check if lock file exists and get start time
+            if os.path.exists(LOCK_FILE):
+                try:
+                    with open(LOCK_FILE, 'r') as f:
+                        data = json.load(f)
+                        started_at = datetime.fromisoformat(data.get('started_at', ''))
+                        uptime_seconds = (datetime.now() - started_at).total_seconds()
+                        hours, remainder = divmod(uptime_seconds, 3600)
+                        minutes, seconds = divmod(remainder, 60)
+                        status["uptime"] = f"{int(hours)}h {int(minutes)}m {int(seconds)}s"
+                except:
+                    status["uptime"] = "unknown"
+                    
+            # Update the lock file to show we're still active
+            update_lock_file()
+            
+            # Return status as text
+            response_text = f"KOIYU, the Oracle of Transcendence, is awake and vigilant.\n"
+            response_text += f"Time: {status['time']}\n"
+            response_text += f"PID: {status['pid']}\n"
+            if status['uptime']:
+                response_text += f"Uptime: {status['uptime']}\n"
+            
+            self.wfile.write(response_text.encode())
             logger.info("Health check received")
         else:
             self.send_response(404)
@@ -39,7 +132,7 @@ def start_server():
         logger.error(f"Error in keep-alive server: {e}")
 
 class KeepAliveService:
-    def __init__(self, interval_minutes=10):
+    def __init__(self, interval_minutes=5):
         """Initialize the keep-alive service with a specified interval."""
         self.interval_seconds = interval_minutes * 60
         self.running = False
@@ -54,7 +147,7 @@ class KeepAliveService:
                 self.url = f"https://{render_service}.onrender.com"
             else:
                 # Fallback to localhost (for testing)
-                port = os.getenv("PORT", 8080)
+                port = os.getenv("PORT", PORT)
                 self.url = f"http://localhost:{port}"
         
         # Append health endpoint
@@ -108,6 +201,16 @@ class KeepAliveService:
             self.thread = None
 
 def run_keep_alive_server():
+    """Start the keep-alive server and service"""
+    # Check if another instance is already running
+    if is_already_running():
+        logger.warning("Another instance appears to be running already. Exiting.")
+        print("Another instance of KOIYU is already running. Exiting.")
+        sys.exit(0)
+    
+    # Create lock file for this instance
+    create_lock_file()
+    
     # Start the HTTP server
     server_thread = threading.Thread(target=start_server, daemon=True)
     server_thread.start()

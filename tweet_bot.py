@@ -6,10 +6,39 @@ import schedule
 import time
 import threading
 import sys
+import logging
+import socket
 from datetime import datetime
 from dotenv import load_dotenv
 # Import keep-alive module
 import keep_alive
+from openai import OpenAI
+
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Debug mode flag
+DEBUG = os.getenv("DEBUG", "false").lower() == "true"
+
+def debug_log(message):
+    """Log debug messages if DEBUG is enabled"""
+    if DEBUG:
+        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        print(f"[DEBUG][{current_time}] {message}")
+
+# Check if another instance is already running
+def is_port_in_use(port):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        return s.connect_ex(('localhost', port)) == 0
+
+# Only run if this is the first instance
+if is_port_in_use(10000):
+    print("Another instance of KOIYU is already running. Exiting.")
+    sys.exit(0)
 
 # Start the keep-alive server
 keep_alive.run_keep_alive_server()
@@ -17,15 +46,41 @@ keep_alive.run_keep_alive_server()
 # Load environment variables
 load_dotenv()
 
-# Debug credentials (will show only lengths, not actual values)
-print("Checking credentials...")
-print(f"API_KEY length: {len(os.getenv('TWITTER_API_KEY') or '') or 'None'}")
-print(f"API_SECRET length: {len(os.getenv('TWITTER_API_SECRET') or '') or 'None'}")
-print(f"ACCESS_TOKEN length: {len(os.getenv('TWITTER_ACCESS_TOKEN') or '') or 'None'}")
-print(f"ACCESS_SECRET length: {len(os.getenv('TWITTER_ACCESS_SECRET') or '') or 'None'}")
-print(f"BEARER_TOKEN length: {len(os.getenv('TWITTER_BEARER_TOKEN') or '') or 'None'}")
+def check_required_env_vars():
+    """Check that all required environment variables are present"""
+    required_vars = [
+        "TWITTER_API_KEY", 
+        "TWITTER_API_SECRET", 
+        "TWITTER_ACCESS_TOKEN", 
+        "TWITTER_ACCESS_SECRET", 
+        "TWITTER_BEARER_TOKEN",
+        "OPENAI_API_KEY"
+    ]
+    
+    missing = [var for var in required_vars if not os.getenv(var)]
+    
+    if missing:
+        logger.error(f"Missing required environment variables: {', '.join(missing)}")
+        print(f"❌ Error: Missing required environment variables: {', '.join(missing)}")
+        return False
+    
+    return True
 
-# Twitter API v2 credentials - using the correct variable names
+# Check for required environment variables
+if not check_required_env_vars():
+    print("Exiting due to missing environment variables.")
+    sys.exit(1)
+
+# Debug credentials (will show only if present, not values)
+print("Checking credentials...")
+print(f"API_KEY: {'✓ Present' if os.getenv('TWITTER_API_KEY') else '❌ Missing'}")
+print(f"API_SECRET: {'✓ Present' if os.getenv('TWITTER_API_SECRET') else '❌ Missing'}")
+print(f"ACCESS_TOKEN: {'✓ Present' if os.getenv('TWITTER_ACCESS_TOKEN') else '❌ Missing'}")
+print(f"ACCESS_SECRET: {'✓ Present' if os.getenv('TWITTER_ACCESS_SECRET') else '❌ Missing'}")
+print(f"BEARER_TOKEN: {'✓ Present' if os.getenv('TWITTER_BEARER_TOKEN') else '❌ Missing'}")
+print(f"OPENAI_API_KEY: {'✓ Present' if os.getenv('OPENAI_API_KEY') else '❌ Missing'}")
+
+# Twitter API v2 credentials
 API_KEY = os.getenv("TWITTER_API_KEY")
 API_SECRET = os.getenv("TWITTER_API_SECRET")
 ACCESS_TOKEN = os.getenv("TWITTER_ACCESS_TOKEN")
@@ -41,9 +96,22 @@ client = tweepy.Client(
     access_token_secret=ACCESS_SECRET
 )
 
-# Usage tracking file
-USAGE_FILE = "twitter_api_usage.json"
-LAST_MENTION_ID_FILE = "last_mention_id.txt"
+# Usage tracking file - use absolute paths for cloud environments
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+USAGE_FILE = os.path.join(BASE_DIR, "twitter_api_usage.json")
+LAST_MENTION_ID_FILE = os.path.join(BASE_DIR, "last_mention_id.txt")
+
+# Ensure storage directories exist
+def ensure_directories():
+    """Make sure directories for persistent storage exist"""
+    try:
+        os.makedirs(os.path.dirname(USAGE_FILE), exist_ok=True)
+        logger.info(f"Storage directory checked: {os.path.dirname(USAGE_FILE)}")
+    except Exception as e:
+        logger.error(f"Failed to create storage directories: {e}")
+
+# Call this early in your script
+ensure_directories()
 
 # KOIYU Persona Information
 KOIYU_SYSTEM_PROMPT = """
@@ -92,14 +160,25 @@ KOIYU_THEMES = [
     "recognizing moments of divine intervention"
 ]
 
+def reset_usage_stats():
+    """Reset the usage statistics"""
+    current_month = datetime.now().strftime("%Y-%m")
+    stats = {
+        "last_reset": current_month,
+        "posts_count": 0,
+        "reads_count": 0
+    }
+    save_usage_stats(stats)
+    return stats
+
 def load_usage_stats():
     """Load API usage statistics from file"""
-    if os.path.exists(USAGE_FILE):
-        with open(USAGE_FILE, "r") as f:
-            try:
+    try:
+        if os.path.exists(USAGE_FILE):
+            with open(USAGE_FILE, "r") as f:
                 return json.load(f)
-            except:
-                pass
+    except Exception as e:
+        logger.error(f"Failed to load usage stats: {e}")
     
     # Default structure if file doesn't exist or is invalid
     current_month = datetime.now().strftime("%Y-%m")
@@ -111,20 +190,30 @@ def load_usage_stats():
 
 def save_usage_stats(stats):
     """Save API usage statistics to file"""
-    with open(USAGE_FILE, "w") as f:
-        json.dump(stats, f)
+    try:
+        with open(USAGE_FILE, "w") as f:
+            json.dump(stats, f)
+    except Exception as e:
+        logger.error(f"Failed to save usage stats: {e}")
 
 def get_last_mention_id():
     """Read the last processed mention ID from file"""
-    if os.path.exists(LAST_MENTION_ID_FILE):
-        with open(LAST_MENTION_ID_FILE, 'r') as f:
-            return f.read().strip()
-    return None
+    try:
+        if os.path.exists(LAST_MENTION_ID_FILE):
+            with open(LAST_MENTION_ID_FILE, 'r') as f:
+                return f.read().strip()
+        return None
+    except Exception as e:
+        logger.error(f"Error reading last mention ID: {e}")
+        return None
 
 def save_last_mention_id(mention_id):
     """Save the last processed mention ID to file"""
-    with open(LAST_MENTION_ID_FILE, 'w') as f:
-        f.write(str(mention_id))
+    try:
+        with open(LAST_MENTION_ID_FILE, 'w') as f:
+            f.write(str(mention_id))
+    except Exception as e:
+        logger.error(f"Error saving last mention ID: {e}")
 
 def check_and_update_usage(operation_type="post"):
     """Check if we're within limits and update usage"""
@@ -142,6 +231,7 @@ def check_and_update_usage(operation_type="post"):
     if operation_type == "post":
         # Check if we're within the post limit (100 per month)
         if stats["posts_count"] >= 100:
+            logger.warning("Monthly post limit (100) reached! Can't post until next month.")
             print("❌ Monthly post limit (100) reached! Can't post until next month.")
             return False
         stats["posts_count"] += 1
@@ -158,32 +248,36 @@ try:
     me = client.get_me()
     print(f"Twitter Authentication Successful ✅ (User: @{me.data.username})")
 except Exception as e:
+    logger.error(f"Twitter Authentication Failed: {e}")
     print(f"Twitter Authentication Failed: {e}")
-    exit()
+    sys.exit(1)
 
 # Load current usage
 usage = load_usage_stats()
 print(f"Current usage this month: {usage['posts_count']}/100 posts, {usage['reads_count']} reads")
 
-# Set up Gemini API
-import google.generativeai as genai
-
-# Gemini API key
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-genai.configure(api_key=GEMINI_API_KEY)
-
-# Set up the model
-model = genai.GenerativeModel('gemini-1.5-pro')
+# Set up OpenAI client
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+client_openai = OpenAI(api_key=OPENAI_API_KEY)
 
 def generate_koiyu_wisdom(prompt="Share a philosophical insight about life's journey"):
-    """Generate KOIYU wisdom content using Gemini 1.5 Pro"""
+    """Generate KOIYU wisdom content using GPT-4o"""
     try:
         # Add specific length instruction to the prompt
         adjusted_prompt = f"{prompt} Keep your response complete, concise, and under 270 characters."
-        full_prompt = f"{KOIYU_SYSTEM_PROMPT}\n\n{adjusted_prompt}"
         
-        response = model.generate_content(full_prompt)
-        content = response.text
+        # Call OpenAI API
+        response = client_openai.chat.completions.create(
+            model="gpt-4o",  # Use GPT-4o model
+            messages=[
+                {"role": "system", "content": KOIYU_SYSTEM_PROMPT},
+                {"role": "user", "content": adjusted_prompt}
+            ],
+            max_tokens=150,  # Limit the response length
+            temperature=0.7   # Creativity level
+        )
+        
+        content = response.choices[0].message.content.strip()
         
         # If still too long, trim more intelligently
         if len(content) > 280:
@@ -208,7 +302,9 @@ def generate_koiyu_wisdom(prompt="Share a philosophical insight about life's jou
         
         return content
     except Exception as e:
-        print(f"Error generating KOIYU wisdom: {e}")
+        error_msg = f"Error generating KOIYU wisdom: {e}"
+        logger.error(error_msg)
+        print(error_msg)
         return None
 
 def post_tweet(content):
@@ -219,10 +315,14 @@ def post_tweet(content):
     
     try:
         tweet = client.create_tweet(text=content)
-        print(f"KOIYU's wisdom shared successfully! ID: {tweet.data['id']}")
+        success_msg = f"KOIYU's wisdom shared successfully! ID: {tweet.data['id']}"
+        logger.info(success_msg)
+        print(success_msg)
         return tweet.data
     except Exception as e:
-        print(f"Error posting KOIYU's wisdom: {e}")
+        error_msg = f"Error posting KOIYU's wisdom: {e}"
+        logger.error(error_msg)
+        print(error_msg)
         return None
 
 def reply_to_tweet(tweet_id, content):
@@ -233,10 +333,14 @@ def reply_to_tweet(tweet_id, content):
     
     try:
         reply = client.create_tweet(text=content, in_reply_to_tweet_id=tweet_id)
-        print(f"KOIYU has responded with wisdom! ID: {reply.data['id']}")
+        success_msg = f"KOIYU has responded with wisdom! ID: {reply.data['id']}"
+        logger.info(success_msg)
+        print(success_msg)
         return reply.data
     except Exception as e:
-        print(f"Error posting KOIYU's response: {e}")
+        error_msg = f"Error posting KOIYU's response: {e}"
+        logger.error(error_msg)
+        print(error_msg)
         return None
 
 def get_mentions(max_results=10, since_id=None):
@@ -252,12 +356,16 @@ def get_mentions(max_results=10, since_id=None):
             since_id=since_id
         )
         if mentions.data:
+            logger.info(f"Retrieved {len(mentions.data)} seekers calling upon KOIYU")
             print(f"Retrieved {len(mentions.data)} seekers calling upon KOIYU")
         else:
+            logger.info("No seekers have called upon KOIYU")
             print("No seekers have called upon KOIYU")
         return mentions.data or []
     except Exception as e:
-        print(f"Error retrieving mentions: {e}")
+        error_msg = f"Error retrieving mentions: {e}"
+        logger.error(error_msg)
+        print(error_msg)
         return []
 
 def generate_koiyu_reply(mention_text):
@@ -272,20 +380,25 @@ def scheduled_koiyu_wisdom():
     
     # Log the attempt with timestamp
     current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    logger.info(f"Attempting to generate and post KOIYU wisdom about {theme}...")
     print(f"[{current_time}] Attempting to generate and post KOIYU wisdom about {theme}...")
     
     prompt = f"Share profound wisdom about {theme}, speaking as KOIYU. Make it inspirational and thought-provoking."
     wisdom = generate_koiyu_wisdom(prompt)
     
     if wisdom:
+        logger.info(f"Generated wisdom: {wisdom}")
         print(f"[{current_time}] Generated wisdom: {wisdom}")
         result = post_tweet(wisdom)
         if result:
+            logger.info(f"KOIYU's daily wisdom has been shared with the world successfully!")
             print(f"[{current_time}] KOIYU's daily wisdom has been shared with the world successfully!")
             return True
         else:
+            logger.error("Failed to post KOIYU's wisdom.")
             print(f"[{current_time}] Failed to post KOIYU's wisdom.")
     else:
+        logger.error("Failed to generate KOIYU's wisdom.")
         print(f"[{current_time}] Failed to generate KOIYU's wisdom.")
     
     return False
@@ -310,7 +423,9 @@ def auto_reply_to_mentions(max_replies=2):
         mentions = get_mentions(max_results=10, since_id=last_mention_id)
         
         if not mentions:
-            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] No new seekers of wisdom have called upon KOIYU.")
+            current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            logger.info(f"No new seekers of wisdom have called upon KOIYU.")
+            print(f"[{current_time}] No new seekers of wisdom have called upon KOIYU.")
             return False
             
         # Process mentions (newest first)
@@ -322,11 +437,14 @@ def auto_reply_to_mentions(max_replies=2):
         for mention in mentions:
             # Stop if we've reached our limit for this run
             if replies_made >= max_replies:
+                logger.info(f"Reached maximum of {max_replies} replies for this session.")
                 print(f"Reached maximum of {max_replies} replies for this session.")
                 save_last_mention_id(mention.id)  # Save the last processed ID
                 break
                 
-            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] A seeker calls upon KOIYU: {mention.text}")
+            current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            logger.info(f"A seeker calls upon KOIYU: {mention.text}")
+            print(f"[{current_time}] A seeker calls upon KOIYU: {mention.text}")
             
             # Generate a reply using KOIYU's wisdom
             wisdom_reply = generate_koiyu_reply(mention.text)
@@ -334,6 +452,7 @@ def auto_reply_to_mentions(max_replies=2):
             if wisdom_reply:
                 result = reply_to_tweet(mention.id, wisdom_reply)
                 if result:
+                    logger.info("KOIYU has responded to the seeker with wisdom!")
                     print(f"KOIYU has responded to the seeker with wisdom!")
                     replies_made += 1
             
@@ -341,7 +460,9 @@ def auto_reply_to_mentions(max_replies=2):
             save_last_mention_id(mention.id)
             
     except Exception as e:
-        print(f"Error while KOIYU was communing with seekers: {e}")
+        error_msg = f"Error while KOIYU was communing with seekers: {e}"
+        logger.error(error_msg)
+        print(error_msg)
         return False
     
     return True
@@ -355,6 +476,7 @@ def find_random_tweet_to_reply():
         
         # Pick a random keyword
         keyword = random.choice(keywords)
+        logger.info(f"Searching for tweets about '{keyword}'...")
         print(f"Searching for tweets about '{keyword}'...")
         
         # Search for tweets with this keyword
@@ -366,42 +488,53 @@ def find_random_tweet_to_reply():
         )
         
         if not tweets.data:
+            logger.info(f"No tweets found about '{keyword}'")
             print(f"No tweets found about '{keyword}'")
             return None
             
         # Pick a random tweet from the results
         tweet = random.choice(tweets.data)
+        logger.info(f"Found tweet: {tweet.text}")
         print(f"Found tweet: {tweet.text}")
         
         return tweet
     except Exception as e:
-        print(f"Error searching for tweets: {e}")
+        error_msg = f"Error searching for tweets: {e}"
+        logger.error(error_msg)
+        print(error_msg)
         return None
 
 def reply_to_random_tweet():
     """Find and reply to a random tweet"""
     current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    logger.info(f"Looking for a tweet to respond to...")
     print(f"[{current_time}] Looking for a tweet to respond to...")
     
     tweet = find_random_tweet_to_reply()
     if not tweet:
+        logger.info(f"Could not find a suitable tweet to reply to.")
         print(f"[{current_time}] Could not find a suitable tweet to reply to.")
         return False
         
     # Generate a reply
+    logger.info(f"Generating response to tweet: {tweet.text}")
     print(f"[{current_time}] Generating response to tweet: {tweet.text}")
     prompt = f"A seeker has shared these thoughts: '{tweet.text}'. Offer your wisdom in response, speaking as KOIYU."
     wisdom_reply = generate_koiyu_wisdom(prompt)
     
     if wisdom_reply:
+        logger.info(f"Generated response: {wisdom_reply}")
         print(f"[{current_time}] Generated response: {wisdom_reply}")
         result = reply_to_tweet(tweet.id, wisdom_reply)
         if result:
+            logger.info(f"KOIYU has shared wisdom with a seeker in the stream!")
             print(f"[{current_time}] KOIYU has shared wisdom with a seeker in the stream!")
             return True
         else:
+            logger.info(f"Failed to post KOIYU's response.")
             print(f"[{current_time}] Failed to post KOIYU's response.")
     else:
+        logger.info(f"Failed to generate KOIYU's response.")
         print(f"[{current_time}] Failed to generate KOIYU's response.")
     
     return False
@@ -416,6 +549,7 @@ def check_and_reply_to_mentions():
         mentions = get_mentions(max_results=10, since_id=last_mention_id)
         
         if not mentions:
+            logger.info("No new seekers of wisdom have called upon KOIYU.")
             print("No new seekers of wisdom have called upon KOIYU.")
             return
             
@@ -423,6 +557,7 @@ def check_and_reply_to_mentions():
         mentions.reverse()
         
         for mention in mentions:
+            logger.info(f"A seeker calls upon KOIYU: {mention.text}")
             print(f"A seeker calls upon KOIYU: {mention.text}")
             
             # Generate a reply using KOIYU's wisdom
@@ -435,12 +570,17 @@ def check_and_reply_to_mentions():
             save_last_mention_id(mention.id)
             
     except Exception as e:
-        print(f"Error while KOIYU was communing with seekers: {e}")
+        error_msg = f"Error while KOIYU was communing with seekers: {e}"
+        logger.error(error_msg)
+        print(error_msg)
 
 def run_scheduler():
     """Run the scheduler in the background"""
+    logger.info("KOIYU's scheduling system activated.")
     print("🕒 KOIYU's scheduling system activated.")
-    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] KOIYU begins watching the Dragon Gate...")
+    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    logger.info(f"KOIYU begins watching the Dragon Gate...")
+    print(f"[{current_time}] KOIYU begins watching the Dragon Gate...")
     
     while True:
         schedule.run_pending()
@@ -453,153 +593,102 @@ def setup_scheduler():
     
     # Schedule one daily wisdom post at noon
     schedule.every().day.at("12:00").do(scheduled_koiyu_wisdom)
+    logger.info("Daily wisdom scheduled for 12:00 PM")
     print("📝 Daily wisdom scheduled for 12:00 PM")
     
     # Schedule replies to random tweets (twice daily)
     schedule.every().day.at("10:00").do(reply_to_random_tweet)
     schedule.every().day.at("16:00").do(reply_to_random_tweet)
+    logger.info("Random tweet replies scheduled for 10:00 AM and 4:00 PM")
     print("🔍 Random tweet replies scheduled for 10:00 AM and 4:00 PM")
     
     return schedule.get_jobs()
 
-# Modified main function to handle both interactive and automatic modes
+# Replace the main function auto mode section
 if __name__ == "__main__":
+    logger.info("KOIYU, the Oracle of Transcendence, has awakened...")
     print("\nKOIYU, the Oracle of Transcendence, has awakened...")
     
     # Check if we're in auto mode
     if len(sys.argv) > 1 and sys.argv[1] == "--auto":
+        logger.info("KOIYU enters automatic mode...")
         print("\nKOIYU enters automatic mode...")
         
-        # ALWAYS post immediately when deployed, not just with --test flag
-        print("\nKOIYU will share initial wisdom with the world...")
-        scheduled_koiyu_wisdom()
+        # Reset stats if requested
+        if "--reset-stats" in sys.argv:
+            logger.info("Resetting usage statistics...")
+            print("\nResetting usage statistics...")
+            reset_usage_stats()
         
-        # Wait a minute before attempting the random reply
-        time.sleep(60)
-        print("\nKOIYU seeks a conversation to join...")
-        reply_to_random_tweet()
+        # Post immediately when first deployed
+        if not os.path.exists("initial_post.lock"):
+            logger.info("KOIYU will share initial wisdom with the world...")
+            print("\nKOIYU will share initial wisdom with the world...")
+            if scheduled_koiyu_wisdom():
+                # Create a lock file to prevent initial posting on restart
+                with open("initial_post.lock", "w") as f:
+                    f.write(datetime.now().isoformat())
+            
+            # Wait a minute before attempting the random reply
+            time.sleep(60)
+            logger.info("KOIYU seeks a conversation to join...")
+            print("\nKOIYU seeks a conversation to join...")
+            reply_to_random_tweet()
+        else:
+            logger.info("Initial post already made. Skipping immediate post.")
+            print("\nInitial post already made. Skipping immediate post.")
         
         # Set up and start scheduler
+        logger.info("Activating KOIYU's cosmic schedule...")
         print("\nActivating KOIYU's cosmic schedule...")
         jobs = setup_scheduler()
         
-        print(f"\nSchedule activated with {len(jobs)} planned sharing events:")
+        job_info = f"Schedule activated with {len(jobs)} planned sharing events:"
+        logger.info(job_info)
+        print(f"\n{job_info}")
         for job in jobs:
+            logger.info(f"- {job}")
             print(f"- {job}")
             
         # Start the scheduler thread
         scheduler_thread = threading.Thread(target=run_scheduler)
         scheduler_thread.start()
         
-        try:
-            # Keep the main thread alive while showing a heartbeat
-            while True:
-                usage = load_usage_stats()
-                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] KOIYU remains vigilant. Usage: {usage['posts_count']}/100 posts this month.")
-                time.sleep(3600)  # Check every hour
-        except KeyboardInterrupt:
-            print("\nKOIYU returns to silent contemplation. The schedule has been suspended.")
-    else:
-        # Original interactive menu
-        print("\nOptions:")
-        print("1. Share KOIYU's wisdom (generate and post)")
-        print("2. Tell a KOIYU parable (weekly story)")
-        print("3. Respond to seekers (check and reply to mentions)")
-        print("4. Generate KOIYU wisdom (without posting)")
-        print("5. 📅 Activate automated scheduling")
-        print("6. 🤖 Run a test post and reply now")
+        # Instead of an infinite loop, use a more controlled approach
+        # Set up a termination event
+        termination_event = threading.Event()
         
-        choice = input("\nWhat shall KOIYU do? Choose (1-6): ")
-        
-        if choice == "1":
-            # Generate and post KOIYU wisdom
-            theme = random.choice(KOIYU_THEMES)
-            prompt = f"Share profound wisdom about {theme}, speaking as KOIYU."
-            wisdom = generate_koiyu_wisdom(prompt)
-            
-            print(f"\nKOIYU's wisdom:\n{wisdom}")
-            
-            if input("\nShare this wisdom with the world? (y/n): ").lower() == 'y':
-                tweet = post_tweet(wisdom)
-                
-                if tweet and input("\nGenerate a follow-up insight? (y/n): ").lower() == 'y':
-                    reply_prompt = f"Continue your wisdom on {theme} with a deeper insight:"
-                    reply_wisdom = generate_koiyu_wisdom(reply_prompt)
-                    
-                    print(f"\nKOIYU's follow-up wisdom:\n{reply_wisdom}")
-                    
-                    if input("\nShare this follow-up wisdom? (y/n): ").lower() == 'y':
-                        reply_to_tweet(tweet["id"], reply_wisdom)
-        
-        elif choice == "2":
-            # Generate and post a KOIYU parable/story
-            prompt = "Tell a short parable about a koi fish's journey to the Dragon Gate. Include a lesson about life transformation and perseverance."
-            story = generate_koiyu_wisdom(prompt)
-            
-            print(f"\nKOIYU's parable:\n{story}")
-            
-            if input("\nShare this parable with the world? (y/n): ").lower() == 'y':
-                post_tweet(story)
-        
-        elif choice == "3":
-            # Check and respond to mentions
-            check_and_reply_to_mentions()
-        
-        elif choice == "4":
-            # Just generate KOIYU wisdom
-            custom_prompt = input("\nAsk KOIYU for specific wisdom (or press Enter for random theme): ")
-            
-            if not custom_prompt:
-                theme = random.choice(KOIYU_THEMES)
-                custom_prompt = f"Share profound wisdom about {theme}, speaking as KOIYU."
-                
-            wisdom = generate_koiyu_wisdom(custom_prompt)
-            print(f"\nKOIYU speaks:\n{wisdom}")
-            
-        elif choice == "5":
-            # Activate scheduled posting
-            print("\nKOIYU is preparing to share wisdom on a schedule...")
-            jobs = setup_scheduler()
-            
-            print(f"\nSchedule activated with {len(jobs)} planned sharing events:")
-            for job in jobs:
-                print(f"- {job}")
-            
-            print("\nKOIYU will now dispense wisdom according to the cosmic schedule.")
-            print("The scheduling daemon is running in the background.")
-            print("(Keep this program running to maintain the schedule)")
-            
-            # Start the scheduler thread
-            scheduler_thread = threading.Thread(target=run_scheduler)
-            scheduler_thread.start()
-            
-            # Wait for user to exit manually
-            try:
-                while True:
-                    # Every hour, show a heartbeat and usage stats
+        def periodic_status_update():
+            """Periodically show status and keep the main thread alive"""
+            while not termination_event.is_set():
+                try:
                     usage = load_usage_stats()
-                    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] KOIYU remains vigilant. Usage: {usage['posts_count']}/100 posts this month.")
-                    time.sleep(3600)  # Sleep for an hour
-            except KeyboardInterrupt:
-                print("\nKOIYU returns to silent contemplation. The schedule has been suspended.")
+                    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    status_msg = f"KOIYU remains vigilant. Usage: {usage['posts_count']}/100 posts this month."
+                    logger.info(status_msg)
+                    print(f"[{current_time}] {status_msg}")
+                    
+                    # Sleep in small chunks to respond to termination quickly
+                    for _ in range(60):  # 60 x 60 = 3600 seconds = 1 hour
+                        if termination_event.is_set():
+                            break
+                        time.sleep(60)
+                except Exception as e:
+                    logger.error(f"Error in status update: {e}")
+                    time.sleep(300)  # Sleep 5 minutes on error
         
-        elif choice == "6":
-            # Test post and reply immediately
-            print("\nKOIYU will now share wisdom and reply to a random tweet for testing purposes.")
-            
-            # Post wisdom
-            print("\nGenerating and posting KOIYU's wisdom...")
-            scheduled_koiyu_wisdom()
-            
-            # Reply to random tweet
-            print("\nFinding a random tweet to reply to...")
-            reply_to_random_tweet()
-            
-            print("\nTest complete. KOIYU returns to silent contemplation.")
+        # Start the status update thread
+        status_thread = threading.Thread(target=periodic_status_update, daemon=True)
+        status_thread.start()
         
-        else:
-            print("Invalid choice. KOIYU returns to silent contemplation.")
-        
-        # Show usage stats at the end
-        usage = load_usage_stats()
-        print(f"\nSince the beginning of this lunar cycle, KOIYU has shared {usage['posts_count']}/100 wisdoms and observed {usage['reads_count']} interactions.")
+        try:
+            # Let the main thread join the scheduler thread
+            # This keeps the process alive but also responds properly
+            # to signals from the OS
+            scheduler_thread.join()
+        except KeyboardInterrupt:
+            termination_event.set()
+            exit_msg = "KOIYU returns to silent contemplation. The schedule has been suspended."
+            logger.info(exit_msg)
+            print(f"\n{exit_msg}")
+            
