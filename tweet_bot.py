@@ -270,13 +270,24 @@ def scheduled_koiyu_wisdom():
     # Choose a random theme for today's wisdom
     theme = random.choice(KOIYU_THEMES)
     
+    # Log the attempt with timestamp
+    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{current_time}] Attempting to generate and post KOIYU wisdom about {theme}...")
+    
     prompt = f"Share profound wisdom about {theme}, speaking as KOIYU. Make it inspirational and thought-provoking."
     wisdom = generate_koiyu_wisdom(prompt)
     
     if wisdom:
-        post_tweet(wisdom)
-        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] KOIYU's daily wisdom has been shared with the world.")
-        return True
+        print(f"[{current_time}] Generated wisdom: {wisdom}")
+        result = post_tweet(wisdom)
+        if result:
+            print(f"[{current_time}] KOIYU's daily wisdom has been shared with the world successfully!")
+            return True
+        else:
+            print(f"[{current_time}] Failed to post KOIYU's wisdom.")
+    else:
+        print(f"[{current_time}] Failed to generate KOIYU's wisdom.")
+    
     return False
 
 def weekly_koiyu_story():
@@ -369,20 +380,29 @@ def find_random_tweet_to_reply():
 
 def reply_to_random_tweet():
     """Find and reply to a random tweet"""
+    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{current_time}] Looking for a tweet to respond to...")
+    
     tweet = find_random_tweet_to_reply()
     if not tweet:
-        print("Could not find a suitable tweet to reply to.")
+        print(f"[{current_time}] Could not find a suitable tweet to reply to.")
         return False
         
     # Generate a reply
+    print(f"[{current_time}] Generating response to tweet: {tweet.text}")
     prompt = f"A seeker has shared these thoughts: '{tweet.text}'. Offer your wisdom in response, speaking as KOIYU."
     wisdom_reply = generate_koiyu_wisdom(prompt)
     
     if wisdom_reply:
+        print(f"[{current_time}] Generated response: {wisdom_reply}")
         result = reply_to_tweet(tweet.id, wisdom_reply)
         if result:
-            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] KOIYU has shared wisdom with a seeker in the stream!")
+            print(f"[{current_time}] KOIYU has shared wisdom with a seeker in the stream!")
             return True
+        else:
+            print(f"[{current_time}] Failed to post KOIYU's response.")
+    else:
+        print(f"[{current_time}] Failed to generate KOIYU's response.")
     
     return False
 
@@ -450,12 +470,15 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--auto":
         print("\nKOIYU enters automatic mode...")
         
-        # Immediate posting for testing
-        if "--test" in sys.argv:
-            print("\nTesting one wisdom posting and one random reply...")
-            scheduled_koiyu_wisdom()
-            reply_to_random_tweet()
-            
+        # ALWAYS post immediately when deployed, not just with --test flag
+        print("\nKOIYU will share initial wisdom with the world...")
+        scheduled_koiyu_wisdom()
+        
+        # Wait a minute before attempting the random reply
+        time.sleep(60)
+        print("\nKOIYU seeks a conversation to join...")
+        reply_to_random_tweet()
+        
         # Set up and start scheduler
         print("\nActivating KOIYU's cosmic schedule...")
         jobs = setup_scheduler()
