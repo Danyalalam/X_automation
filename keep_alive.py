@@ -114,9 +114,71 @@ class KeepAliveHandler(http.server.SimpleHTTPRequestHandler):
             
             self.wfile.write(response_text.encode())
             logger.info("Health check received")
+        elif self.path == '/admin' and 'authorization' in self.headers:
+            # Simple admin panel with password protection
+            if self.headers['authorization'] == f"Bearer {os.getenv('ADMIN_SECRET', 'default-secret')}":
+                self.send_response(200)
+                self.send_header('Content-type', 'text/html')
+                self.end_headers()
+                
+                # Generate admin HTML
+                try:
+                    from tweet_bot import load_usage_stats, generate_analytics_report
+                    analytics = generate_analytics_report().replace('\n', '<br>')
+                except Exception as e:
+                    analytics = f"Error loading analytics: {str(e)}"
+                    logger.error(f"Admin panel error: {e}")
+                
+                # Add to your HTML:
+                html = f"""
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <title>KOIYU Admin</title>
+                    <style>
+                        /* Your existing styles */
+                        .button {{
+                            display: inline-block;
+                            padding: 10px 15px;
+                            background-color: #336699;
+                            color: white;
+                            border-radius: 4px;
+                            text-decoration: none;
+                            margin-right: 10px;
+                            margin-bottom: 10px;
+                        }}
+                        .button:hover {{
+                            background-color: #254b73;
+                        }}
+                    </style>
+                </head>
+                <body>
+                    <h1>KOIYU Admin Panel</h1>
+                    
+                    <div class="card">
+                        <h2>Controls</h2>
+                        <a href="/admin/post-now" class="button" onclick="return confirm('Are you sure you want KOIYU to post wisdom now?')">Post Wisdom Now</a>
+                        <a href="/admin/reply-now" class="button" onclick="return confirm('Are you sure you want KOIYU to find and reply to a tweet now?')">Reply to Random Tweet</a>
+                        <a href="/admin/reset-stats" class="button" onclick="return confirm('Are you sure you want to reset usage statistics?')">Reset Statistics</a>
+                    </div>
+                    
+                    <div class="card">
+                        <h2>Analytics Report</h2>
+                        <pre>{analytics}</pre>
+                    </div>
+                </body>
+                </html>
+                """
+                self.wfile.write(html.encode())
+                logger.info("Admin panel accessed")
+            else:
+                self.send_response(401)
+                self.send_header('WWW-Authenticate', 'Bearer')
+                self.end_headers()
         else:
             self.send_response(404)
             self.end_headers()
+            self.wfile.write(b"Not Found")
     
     def log_message(self, format, *args):
         # Silent logging to avoid cluttering the console

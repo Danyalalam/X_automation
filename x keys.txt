@@ -11,3 +11,16 @@ ACCESS_TOKEN_SECRET = BmpeVBpNPVWlHWPDkOZB8c59oepfeCw3vBgulUDBJ3Rnd
 CLIENT_ID = Nlh5bGx1YzFaSXMzazlhbEhCV3g6MTpjaQ
 
 CLIENT_SECRET = SlJ0nQ5Ybt1pp3p1sou4gvJcUXlMkKhtomWWpRNq5ZSjL4KkIo
+
+
+
+client id: Y1JjREc0Vm9jUnFPdVB2Z3RPQ006MTpjaQ
+client secret: eUQTv72lzLV5VAPoDqOCQeJ2dol4OCGDz8i5JYWUqLUfYqGOEn
+
+api key: NdkIYMOVcoZfsYv3O1F5QICWj
+api key secret: s7RoZauX0pqarGFnLkDHueQUVBswh25kp03wh068sRgRpH7dJ2
+
+bearer token: AAAAAAAAAAAAAAAAAAAAAG62zwEAAAAAFphhuFpPvY1Hm3GdND3JQAupWSM%3DpFJ9Lj3gRC3m4fsBS1q7mi1F0dixrr0xqslhoGicqK5Ug1Tv7i
+
+access token: 1881819843286138880-bSgxUKGt5WtTCxbR7chqQ9LdD6b7FW
+access token secret: ifFBiuiqU6uHzCphVK6sBNvOKDyoNUfoiwugLBcdkez3A

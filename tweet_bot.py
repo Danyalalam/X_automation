@@ -225,18 +225,42 @@ def check_and_update_usage(operation_type="post"):
         stats = {
             "last_reset": current_month,
             "posts_count": 0,
-            "reads_count": 0
+            "reads_count": 0,
+            "replies_count": 0,
+            "daily_posts": {},
+            "plan": "$100/month"  # Store plan information
         }
     
+    # Get today's date for daily tracking
+    today = datetime.now().strftime("%Y-%m-%d")
+    if today not in stats.get("daily_posts", {}):
+        stats.setdefault("daily_posts", {})[today] = 0
+        
+    # Track different types of operations
     if operation_type == "post":
-        # Check if we're within the post limit (100 per month)
-        if stats["posts_count"] >= 100:
-            logger.warning("Monthly post limit (100) reached! Can't post until next month.")
-            print("❌ Monthly post limit (100) reached! Can't post until next month.")
+        # For the $100/month plan, the limit is much higher (15K/month)
+        # But we'll cap at 1500 for safety
+        if stats["posts_count"] >= 1500:
+            logger.warning("Monthly post limit (1500) reached! Consider upgrading plan.")
+            print("⚠️ Monthly post limit (1500) reached! Consider upgrading plan.")
             return False
+            
+        # Track daily posts (for the daily wisdom post)
+        if stats["daily_posts"][today] >= 1:
+            logger.info("Daily wisdom post already made today")
+        else:
+            stats["daily_posts"][today] += 1
+            
         stats["posts_count"] += 1
+        
+    elif operation_type == "reply":
+        # Track replies separately
+        stats.setdefault("replies_count", 0)
+        stats["replies_count"] += 1
+        stats["posts_count"] += 1  # Also increment total posts
+        
     elif operation_type == "read":
-        # Track read operations (not critical as limit is higher)
+        # Track read operations
         stats["reads_count"] += 1
     
     # Save updated stats
@@ -327,8 +351,8 @@ def post_tweet(content):
 
 def reply_to_tweet(tweet_id, content):
     """Reply to a specific tweet"""
-    # Check if we're within usage limits
-    if not check_and_update_usage("post"):
+    # Check if we're within usage limits - use "reply" type
+    if not check_and_update_usage("reply"):
         return None
     
     try:
@@ -467,6 +491,27 @@ def auto_reply_to_mentions(max_replies=2):
     
     return True
 
+def with_rate_limit_handling(func):
+    """Decorator to handle Twitter API rate limits"""
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            # Check if it's a rate limit error
+            if hasattr(e, 'response') and e.response and e.response.status_code == 429:
+                retry_after = int(e.response.headers.get('x-rate-limit-reset', 60))
+                current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                logger.warning(f"Rate limited! Waiting for {retry_after} seconds.")
+                print(f"[{current_time}] ⚠️ KOIYU has reached the river's edge. Waiting {retry_after} seconds before continuing...")
+                time.sleep(retry_after)
+                # Try again after waiting
+                return func(*args, **kwargs)
+            else:
+                # Re-raise other exceptions
+                raise e
+    return wrapper
+
+@with_rate_limit_handling
 def find_random_tweet_to_reply():
     """Find a random tweet to reply to based on keywords"""
     try:
@@ -574,6 +619,8 @@ def check_and_reply_to_mentions():
         logger.error(error_msg)
         print(error_msg)
 
+
+
 def run_scheduler():
     """Run the scheduler in the background"""
     logger.info("KOIYU's scheduling system activated.")
@@ -596,13 +643,76 @@ def setup_scheduler():
     logger.info("Daily wisdom scheduled for 12:00 PM")
     print("📝 Daily wisdom scheduled for 12:00 PM")
     
-    # Schedule replies to random tweets (twice daily)
-    schedule.every().day.at("10:00").do(reply_to_random_tweet)
-    schedule.every().day.at("16:00").do(reply_to_random_tweet)
-    logger.info("Random tweet replies scheduled for 10:00 AM and 4:00 PM")
-    print("🔍 Random tweet replies scheduled for 10:00 AM and 4:00 PM")
+    # Schedule 50 replies to random tweets spread throughout the day
+    # We'll do this in batches of 5 replies, 10 times per day
+    # This helps avoid rate limits and spaces out the activity
+    reply_times = [
+        "01:30", "04:00", "06:30", "09:00", "11:30",
+        "14:00", "16:30", "19:00", "21:30", "23:45"
+    ]
+    
+    for reply_time in reply_times:
+        # Schedule a batch of 5 replies at each time slot
+        schedule.every().day.at(reply_time).do(batch_random_replies, batch_size=5)
+        logger.info(f"Batch of 5 random replies scheduled for {reply_time}")
+        print(f"🔍 Batch of 5 random replies scheduled for {reply_time}")
     
     return schedule.get_jobs()
+
+def batch_random_replies(batch_size=5):
+    """Process a batch of random tweet replies"""
+    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    logger.info(f"Starting batch of {batch_size} random replies...")
+    print(f"[{current_time}] 🧠 KOIYU begins a meditation to find {batch_size} seekers in need of wisdom...")
+    
+    success_count = 0
+    for i in range(batch_size):
+        try:
+            if reply_to_random_tweet():
+                success_count += 1
+                # Add a delay between replies to avoid hitting rate limits
+                if i < batch_size - 1:  # Don't sleep after the last one
+                    time.sleep(30)  # 30 seconds between tweets in a batch
+        except Exception as e:
+            logger.error(f"Error in batch reply #{i+1}: {e}")
+    
+    logger.info(f"Completed batch with {success_count}/{batch_size} successful replies")
+    print(f"[{current_time}] ✨ KOIYU has completed sharing wisdom with {success_count} seekers")
+    return success_count
+
+def generate_analytics_report():
+    """Generate a report on KOIYU's activity"""
+    stats = load_usage_stats()
+    current_month = datetime.now().strftime("%Y-%m")
+    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    # Format the report
+    report = [
+        f"📊 KOIYU Analytics Report - {current_time}",
+        f"",
+        f"🗓️  Current Month: {current_month}",
+        f"💰 Twitter API Plan: {stats.get('plan', '$100/month')}",
+        f"",
+        f"📈 Activity Summary:",
+        f"   - Total Posts: {stats['posts_count']}",
+        f"   - Regular Wisdom Posts: {sum(stats.get('daily_posts', {}).values())}",
+        f"   - Replies to Seekers: {stats.get('replies_count', 0)}",
+        f"   - Read Operations: {stats['reads_count']}",
+        f"",
+        f"🔮 Cosmic Potential:",
+        f"   - Remaining Monthly Capacity: {1500 - stats['posts_count']} posts",
+        f"",
+        f"🔄 Last System Reset: {stats['last_reset']}",
+    ]
+    
+    report_text = "\n".join(report)
+    logger.info(f"Analytics report generated")
+    print(report_text)
+    
+    return report_text
+
+# Schedule a weekly analytics report
+schedule.every().monday.at("09:00").do(generate_analytics_report)
 
 # Replace the main function auto mode section
 if __name__ == "__main__":
@@ -611,8 +721,10 @@ if __name__ == "__main__":
     
     # Check if we're in auto mode
     if len(sys.argv) > 1 and sys.argv[1] == "--auto":
-        logger.info("KOIYU enters automatic mode...")
-        print("\nKOIYU enters automatic mode...")
+        logger.info("KOIYU enters automatic mode with enhanced capabilities...")
+        print("\nKOIYU enters automatic mode with enhanced capabilities...")
+        print("\n✨ $100/month Twitter API Plan Activated ✨")
+        print("⚡ Enhanced Power: 50 daily replies enabled ⚡")
         
         # Reset stats if requested
         if "--reset-stats" in sys.argv:
