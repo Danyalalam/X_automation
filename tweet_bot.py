@@ -512,8 +512,83 @@ def with_rate_limit_handling(func):
     return wrapper
 
 @with_rate_limit_handling
+def get_tweets_from_following(max_results=20):
+    """Get recent tweets from accounts the user is following"""
+    try:
+        # First, get the list of accounts we're following
+        user_id = client.get_me().data.id
+        following = client.get_users_following(id=user_id, max_results=50)
+        
+        if not following.data:
+            logger.info("No accounts found in following list")
+            print("No accounts found in following list")
+            return None
+            
+        # Get the user IDs of accounts we're following
+        following_ids = [user.id for user in following.data]
+        
+        # Randomly select a user to get tweets from
+        selected_user_id = random.choice(following_ids)
+        
+        # Get recent tweets from this user
+        tweets = client.get_users_tweets(
+            id=selected_user_id,
+            max_results=10,
+            exclude=['retweets', 'replies'],
+            tweet_fields=["id", "text", "created_at", "author_id"]
+        )
+        
+        if not tweets.data:
+            logger.info(f"No recent tweets found from selected user")
+            print(f"No recent tweets found from selected user")
+            return None
+            
+        # Pick a random tweet from this user
+        tweet = random.choice(tweets.data)
+        
+        # Get the user's username for better logging
+        user_info = client.get_user(id=selected_user_id)
+        username = user_info.data.username if user_info.data else "unknown"
+        
+        logger.info(f"Found tweet from @{username}: {tweet.text}")
+        print(f"Found tweet from @{username}: {tweet.text}")
+        
+        return tweet
+    except Exception as e:
+        error_msg = f"Error fetching tweets from following: {e}"
+        logger.error(error_msg)
+        print(error_msg)
+        return None
+
+@with_rate_limit_handling
 def find_random_tweet_to_reply():
-    """Find a random tweet to reply to based on keywords"""
+    """Find a random tweet to reply to from accounts we're following"""
+    try:
+        logger.info("Searching for tweets from accounts KOIYU follows...")
+        print("Searching for tweets from accounts KOIYU follows...")
+        
+        # Get tweets from accounts we're following
+        tweet = get_tweets_from_following(max_results=10)
+        
+        # If nothing found from following, optionally fall back to keyword search
+        if not tweet:
+            # You could uncomment this code if you want to fall back to keywords
+            # logger.info("No tweets found from following. Falling back to keyword search.")
+            # print("No tweets found from following. Falling back to keyword search.")
+            # return search_tweets_by_keywords()
+            return None
+            
+        return tweet
+    except Exception as e:
+        error_msg = f"Error searching for tweets: {e}"
+        logger.error(error_msg)
+        print(error_msg)
+        return None
+
+# Optional fallback function if no tweets found from following
+@with_rate_limit_handling
+def search_tweets_by_keywords():
+    """Search for tweets using keywords as a fallback"""
     try:
         # Keywords related to KOIYU's themes
         keywords = ["transformation", "growth", "challenge", "journey", "wisdom", 
@@ -521,8 +596,8 @@ def find_random_tweet_to_reply():
         
         # Pick a random keyword
         keyword = random.choice(keywords)
-        logger.info(f"Searching for tweets about '{keyword}'...")
-        print(f"Searching for tweets about '{keyword}'...")
+        logger.info(f"Falling back to keyword search for '{keyword}'...")
+        print(f"Falling back to keyword search for '{keyword}'...")
         
         # Search for tweets with this keyword
         query = f"{keyword} -is:retweet -is:reply lang:en"
@@ -544,7 +619,7 @@ def find_random_tweet_to_reply():
         
         return tweet
     except Exception as e:
-        error_msg = f"Error searching for tweets: {e}"
+        error_msg = f"Error in keyword search: {e}"
         logger.error(error_msg)
         print(error_msg)
         return None
@@ -732,23 +807,16 @@ if __name__ == "__main__":
             print("\nResetting usage statistics...")
             reset_usage_stats()
         
-        # Post immediately when first deployed
+        # Skip immediate posting - just log that we're in scheduled mode
+        logger.info("KOIYU enters scheduled operation mode...")
+        print("\nKOIYU enters scheduled operation mode...")
+        logger.info("Initial posts skipped - waiting for scheduled times...")
+        print("Initial posts skipped - waiting for scheduled times...")
+        
+        # Create the initial post lock file to prevent future immediate posts
         if not os.path.exists("initial_post.lock"):
-            logger.info("KOIYU will share initial wisdom with the world...")
-            print("\nKOIYU will share initial wisdom with the world...")
-            if scheduled_koiyu_wisdom():
-                # Create a lock file to prevent initial posting on restart
-                with open("initial_post.lock", "w") as f:
-                    f.write(datetime.now().isoformat())
-            
-            # Wait a minute before attempting the random reply
-            time.sleep(60)
-            logger.info("KOIYU seeks a conversation to join...")
-            print("\nKOIYU seeks a conversation to join...")
-            reply_to_random_tweet()
-        else:
-            logger.info("Initial post already made. Skipping immediate post.")
-            print("\nInitial post already made. Skipping immediate post.")
+            with open("initial_post.lock", "w") as f:
+                f.write(datetime.now().isoformat())
         
         # Set up and start scheduler
         logger.info("Activating KOIYU's cosmic schedule...")
@@ -776,7 +844,8 @@ if __name__ == "__main__":
                 try:
                     usage = load_usage_stats()
                     current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    status_msg = f"KOIYU remains vigilant. Usage: {usage['posts_count']}/100 posts this month."
+                    # Update to show 1500 instead of 100 for the monthly limit
+                    status_msg = f"KOIYU remains vigilant. Usage: {usage['posts_count']}/1500 posts this month."
                     logger.info(status_msg)
                     print(f"[{current_time}] {status_msg}")
                     
