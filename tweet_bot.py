@@ -716,8 +716,25 @@ def run_scheduler():
     logger.info(f"KOIYU begins watching the Dragon Gate...")
     print(f"[{current_time}] KOIYU begins watching the Dragon Gate...")
     
+    next_job_check_time = time.time() + 3600  # Check next job in 1 hour
+    
     while True:
         schedule.run_pending()
+        
+        # Periodically log the next scheduled job for debugging
+        if time.time() > next_job_check_time:
+            try:
+                next_job = schedule.next_run()
+                time_until = (next_job - datetime.now()).total_seconds() / 60
+                logger.info(f"Next scheduled job: {next_job.strftime('%Y-%m-%d %H:%M:%S')} "
+                           f"(in {time_until:.1f} minutes)")
+                print(f"🔮 Next scheduled job: {next_job.strftime('%Y-%m-%d %H:%M:%S')} "
+                     f"(in {time_until:.1f} minutes)")
+            except Exception as e:
+                logger.error(f"Error checking next job: {e}")
+            
+            next_job_check_time = time.time() + 3600  # Check again in 1 hour
+        
         time.sleep(60)  # Check every minute
 
 def setup_scheduler():
@@ -725,14 +742,19 @@ def setup_scheduler():
     # Clear any existing jobs
     schedule.clear()
     
-    # Schedule one daily wisdom post at noon
-    schedule.every().day.at("12:00").do(scheduled_koiyu_wisdom)
-    logger.info("Daily wisdom scheduled for 12:00 PM")
-    print("📝 Daily wisdom scheduled for 12:00 PM")
+    # Schedule one daily wisdom post at noon (specify UTC to be clear)
+    # By default, schedule uses local server time, which for Render is UTC
+    noon_utc = "12:00"
+    schedule.every().day.at(noon_utc).do(scheduled_koiyu_wisdom)
+    logger.info(f"Daily wisdom scheduled for {noon_utc} UTC")
+    print(f"📝 Daily wisdom scheduled for {noon_utc} UTC")
+    
+    # Log current server time for reference
+    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    logger.info(f"Current server time is {current_time} (UTC)")
+    print(f"🕒 Current server time is {current_time} (UTC)")
     
     # Schedule 50 replies to random tweets spread throughout the day
-    # We'll do this in batches of 5 replies, 10 times per day
-    # This helps avoid rate limits and spaces out the activity
     reply_times = [
         "01:30", "04:00", "06:30", "09:00", "11:30",
         "14:00", "16:30", "19:00", "21:30", "23:45"
@@ -741,10 +763,30 @@ def setup_scheduler():
     for reply_time in reply_times:
         # Schedule a batch of 5 replies at each time slot
         schedule.every().day.at(reply_time).do(batch_random_replies, batch_size=5)
-        logger.info(f"Batch of 5 random replies scheduled for {reply_time}")
-        print(f"🔍 Batch of 5 random replies scheduled for {reply_time}")
+        logger.info(f"Batch of 5 random replies scheduled for {reply_time} UTC")
+        print(f"🔍 Batch of 5 random replies scheduled for {reply_time} UTC")
+    
+    # Schedule a check to ensure daily wisdom gets posted
+    # This is a fallback in case the noon post is missed
+    schedule.every().day.at("12:30").do(ensure_daily_wisdom_posted)
+    logger.info("Daily wisdom verification scheduled for 12:30 UTC")
     
     return schedule.get_jobs()
+
+def ensure_daily_wisdom_posted():
+    """Check if a wisdom post was made today, and make one if not"""
+    stats = load_usage_stats()
+    today = datetime.now().strftime("%Y-%m-%d")
+    
+    # Check if we've already posted today
+    if today in stats.get("daily_posts", {}) and stats["daily_posts"][today] > 0:
+        logger.info("Daily wisdom already posted today. No action needed.")
+        return False
+    
+    # If no post yet today, create one now
+    logger.info("No daily wisdom detected for today. Creating one now as a backup.")
+    print("🔄 No daily wisdom detected for today. Creating one now as a backup.")
+    return scheduled_koiyu_wisdom()
 
 def batch_random_replies(batch_size=5):
     """Process a batch of random tweet replies"""
@@ -819,13 +861,20 @@ if __name__ == "__main__":
             print("\nResetting usage statistics...")
             reset_usage_stats()
         
-        # Skip immediate posting - just log that we're in scheduled mode
-        logger.info("KOIYU enters scheduled operation mode...")
-        print("\nKOIYU enters scheduled operation mode...")
-        logger.info("Initial posts skipped - waiting for scheduled times...")
-        print("Initial posts skipped - waiting for scheduled times...")
+        # Create an initial post immediately upon startup
+        logger.info("KOIYU prepares to share initial wisdom with the world...")
+        print("\nKOIYU prepares to share initial wisdom with the world...")
         
-        # Create the initial post lock file to prevent future immediate posts
+        # Post initial wisdom
+        initial_success = scheduled_koiyu_wisdom()
+        if initial_success:
+            logger.info("Initial wisdom shared successfully!")
+            print("\n✨ Initial wisdom shared successfully! ✨")
+        else:
+            logger.warning("Could not share initial wisdom. Continuing with scheduled posts.")
+            print("\n⚠️ Could not share initial wisdom. Continuing with scheduled posts.")
+        
+        # Create the initial post lock file to prevent duplicate posts on restart
         if not os.path.exists("initial_post.lock"):
             with open("initial_post.lock", "w") as f:
                 f.write(datetime.now().isoformat())
