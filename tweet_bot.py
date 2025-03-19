@@ -562,23 +562,35 @@ def get_tweets_from_following(max_results=20):
 
 @with_rate_limit_handling
 def find_random_tweet_to_reply():
-    """Find a random tweet to reply to from accounts we're following"""
+    """Find a random tweet to reply to from accounts we're following or by keywords"""
     try:
         logger.info("Searching for tweets from accounts KOIYU follows...")
         print("Searching for tweets from accounts KOIYU follows...")
         
-        # Get tweets from accounts we're following
-        tweet = get_tweets_from_following(max_results=10)
+        # First try to get tweets from accounts we're following
+        try:
+            tweet = get_tweets_from_following(max_results=10)
+            if tweet:
+                return tweet
+        except Exception as e:
+            error_msg = f"Error accessing following list: {e}"
+            logger.warning(error_msg)
+            print(f"⚠️ {error_msg}")
+            logger.info("Falling back to keyword search due to following list access error.")
+            print("Falling back to keyword search due to following list access error.")
         
-        # If nothing found from following, optionally fall back to keyword search
-        if not tweet:
-            # You could uncomment this code if you want to fall back to keywords
-            # logger.info("No tweets found from following. Falling back to keyword search.")
-            # print("No tweets found from following. Falling back to keyword search.")
-            # return search_tweets_by_keywords()
-            return None
+        # If nothing found from following or an error occurred, fall back to keyword search
+        logger.info("Attempting to find tweets by keyword search...")
+        print("Attempting to find tweets by keyword search...")
+        
+        tweet = search_tweets_by_keywords()
+        if tweet:
+            return tweet
+        
+        logger.warning("No suitable tweets found via following list or keywords.")
+        print("No suitable tweets found via following list or keywords.")
+        return None
             
-        return tweet
     except Exception as e:
         error_msg = f"Error searching for tweets: {e}"
         logger.error(error_msg)
