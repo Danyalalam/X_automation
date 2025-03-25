@@ -603,8 +603,8 @@ def search_tweets_by_keywords():
     """Search for tweets using keywords as a fallback"""
     try:
         # Keywords related to KOIYU's themes
-        keywords = ["transformation", "growth", "challenge", "journey", "wisdom", 
-                   "success", "motivation", "potential", "purpose", "struggle"]
+        keywords = ["HODL", "WAGMI", "DeFi", "Web3", "Crypto", 
+                   "$IP", "StoryProtocol", "$SOL", "$ETH", "Ai Agent"]
         
         # Pick a random keyword
         keyword = random.choice(keywords)
